@@ -10,11 +10,17 @@ const apiKey = process.env.OPENAI_API_KEY;
 const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+  const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
+
+  console.log(`Incoming request: ${req.method} ${pathname}`);
+
+  // Homepage
+  if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
     const filePath = path.join(__dirname, 'index.html');
 
     if (!fs.existsSync(filePath)) {
-      res.writeHead(500);
+      console.error('index.html missing at:', filePath);
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end('index.html missing');
       return;
     }
@@ -27,13 +33,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/health') {
+  // Health check
+  if (req.method === 'GET' && pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/api/analyze') {
+  // AI analysis
+  if (req.method === 'POST' && pathname === '/api/analyze') {
     if (!apiKey) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'OPENAI_API_KEY not configured' }));
@@ -42,7 +50,9 @@ const server = http.createServer(async (req, res) => {
 
     let body = '';
 
-    req.on('data', chunk => body += chunk);
+    req.on('data', chunk => {
+      body += chunk;
+    });
 
     req.on('end', async () => {
       try {
@@ -77,7 +87,10 @@ const server = http.createServer(async (req, res) => {
         });
 
         res.end(JSON.stringify({ analysis }));
+
       } catch (error) {
+        console.error('AI error:', error.message);
+
         res.writeHead(500, {
           'Content-Type': 'application/json'
         });
@@ -89,10 +102,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Diagnostic 404
+  console.log(`Route not found: ${req.method} ${pathname}`);
+
   res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('Not found');
+  res.end(`Not found: ${req.method} ${pathname}`);
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Expansion Intelligence running on port ${PORT}`);
 });

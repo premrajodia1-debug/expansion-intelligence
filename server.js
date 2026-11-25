@@ -1,4 +1,3 @@
-
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,8 +14,11 @@ function send(res, status, payload, contentType = 'application/json; charset=utf
 }
 
 const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  // Homepage
   if ((req.method === 'GET' || req.method === 'HEAD') &&
-      (req.url === '/' || req.url === '/index.html')) {
+      (url.pathname === '/' || url.pathname === '/index.html')) {
     const filePath = path.join(__dirname, 'index.html');
 
     if (!fs.existsSync(filePath)) {
@@ -25,19 +27,23 @@ const server = http.createServer(async (req, res) => {
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
-    if (req.method === 'HEAD') return res.end();
+    if (req.method === 'HEAD') {
+      return res.end();
+    }
 
     return res.end(fs.readFileSync(filePath));
   }
 
-  if (req.method === 'GET' && req.url === '/health') {
+  // Health check
+  if (req.method === 'GET' && url.pathname === '/health') {
     return send(res, 200, 'OK', 'text/plain; charset=utf-8');
   }
 
-  if (req.method === 'POST' && req.url === '/api/analyze') {
+  // AI Market Analysis
+  if (req.method === 'POST' && url.pathname === '/api/analyze') {
     if (!apiKey) {
-      return send(res, 503, {
-        error: 'AI service is not configured. Set OPENAI_API_KEY on the server.'
+      return send(res, 500, {
+        error: 'OPENAI_API_KEY is not configured in Render.'
       });
     }
 
@@ -45,80 +51,69 @@ const server = http.createServer(async (req, res) => {
 
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 100000) req.destroy();
+
+      if (body.length > 1_000_000) {
+        req.destroy();
+      }
     });
 
     req.on('end', async () => {
       try {
         const input = JSON.parse(body);
 
-        const company = String(input.company || '').trim();
-        const homeMarket = String(input.homeMarket || '').trim();
-        const targetMarket = String(input.targetMarket || '').trim();
-        const industry = String(input.industry || '').trim();
-        const budget = String(input.budget ?? '').trim();
+        const prompt = `
+You are a senior international market-entry consultant.
 
-        if (!company || !homeMarket || !targetMarket || !industry || !budget) {
-          return send(res, 400, {
-            error: 'Please provide all required market-entry details.'
-          });
-        }
+Analyze the following business and market-entry information:
+${JSON.stringify(input, null, 2)}
 
-        const prompt = `You are a careful international business expansion analyst.
-
-Create a practical, structured preliminary market-entry assessment.
-
-Clearly distinguish assumptions from verified facts.
-You do not have live browsing or current market data.
-Do not invent statistics, competitor facts, citations, or claim live research.
-
-Company/product: ${company}
-Home market: ${homeMarket}
-Target market: ${targetMarket}
-Budget: EUR ${budget}
-Industry: ${industry}
-
-Include:
+Provide a structured, professional market-entry assessment covering:
 1. Executive recommendation
-2. Target customer hypotheses
-3. Market-entry route options
-4. Competitor-analysis framework and what needs verification
-5. Localization and pricing considerations
-6. Key risks including regulatory issues to investigate
-7. Budget considerations
-8. A 90-day plan
-9. Five research questions
-10. Go/no-go checklist
+2. Target market attractiveness
+3. Customer and demand considerations
+4. Competitor landscape
+5. Pricing strategy
+6. Distribution strategy
+7. Localization recommendations
+8. Regulatory and operational risks
+9. Recommended market-entry mode
+10. A practical 90-day action plan
 
-Use concise headings and actionable bullets.
-Label assumptions and research gaps clearly.`;
+Be specific, clear, realistic, and professional.
+Clearly distinguish assumptions from verified facts.
+Do not invent live statistics, sources, or citations.
+`;
 
-        const aiRes = await fetch('https://api.openai.com/v1/responses', {
+        const response = await fetch('https://api.openai.com/v1/responses', {
           method: 'POST',
           headers: {
-           'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
           },
-          body: JSON.stringify({ model, input: prompt })
+          body: JSON.stringify({
+            model,
+            input: prompt
+          })
         });
 
-        const data = await aiRes.json();
+        const data = await response.json();
 
-        if (!aiRes.ok) {
-          throw new Error(data.error?.message || 'AI API request failed');
+        if (!response.ok) {
+          return send(res, response.status, {
+            error: data.error?.message || 'AI request failed'
+          });
         }
 
         const analysis = data.output
           ?.flatMap(item => item.content || [])
-          ?.filter(c => c.type === 'output_text')
-          ?.map(c => c.text)
-          ?.join('\\n') || 'No text returned.';
+          ?.filter(item => item.type === 'output_text')
+          ?.map(item => item.text)
+          ?.join('\n') || 'No analysis generated.';
 
         return send(res, 200, { analysis });
-
       } catch (error) {
         return send(res, 500, {
-          error: error.message || 'Unexpected server error.'
+          error: error.message || 'Server error during analysis'
         });
       }
     });
@@ -126,9 +121,10 @@ Label assumptions and research gaps clearly.`;
     return;
   }
 
+  // Unknown route
   return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
 });
 
 server.listen(PORT, () => {
- console.log('Expansion Intelligence running on port ' + PORT);
+  console.log(`Expansion Intelligence running on port ${PORT}`);
 });
